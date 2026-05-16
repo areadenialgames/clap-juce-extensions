@@ -560,11 +560,9 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
     void reset() noexcept override { processor->reset(); }
 
   public:
-    bool implementsTimerSupport() const noexcept override { return true; }
-    void onTimer(clap_id timerId) noexcept override
-    {
-        juce::ignoreUnused(timerId);
 #if JUCE_LINUX
+    static void pumpLinuxJuceMessageQueue()
+    {
         juce::ScopedJuceInitialiser_GUI libraryInitialiser;
         const juce::MessageManagerLock mmLock;
 
@@ -580,6 +578,15 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
         auto mm = juce::MessageManager::getInstance();
         mm->runDispatchLoopUntil(0);
 #endif
+    }
+#endif
+
+    bool implementsTimerSupport() const noexcept override { return true; }
+    void onTimer(clap_id timerId) noexcept override
+    {
+        juce::ignoreUnused(timerId);
+#if JUCE_LINUX
+        pumpLinuxJuceMessageQueue();
 #endif
     }
 
@@ -928,6 +935,13 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
         insideActivate = true;
         processor->setRateAndBufferSizeDetails(sampleRate, (int)maxFrameCount);
         processor->prepareToPlay(sampleRate, (int)maxFrameCount);
+#if JUCE_LINUX
+        // Some hosts do not deliver timer callbacks before the first process
+        // cycle. Flush JUCE async work posted by prepareToPlay so processors
+        // that initialise on the message thread are ready immediately. Still
+        // inside activate, so a latency change it posts is reported below.
+        pumpLinuxJuceMessageQueue();
+#endif
         insideActivate = false;
 
         if ((callLatencyChangeOnNextActivate || latencyChangedDuringActivate) && _host.canUseLatency())
@@ -2466,6 +2480,9 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
         // JUCE has no way to report an unstream error; setStateInformation is void
         // So we just have to assume it works.
         processor->setStateInformation(chunkMemory.getData(), (int)chunkMemory.getSize());
+#if JUCE_LINUX
+        pumpLinuxJuceMessageQueue();
+#endif
         chunkMemory.reset();
         return true;
     }
